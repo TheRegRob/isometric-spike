@@ -31,27 +31,29 @@ enum class Direction(val folderSuffix: String) {
 }
 
 /**
- * Carica un set di animazioni da spritesheet a griglia (uno spritesheet per
- * ogni combinazione azione+direzione, con piu' frame disposti in righe/colonne).
- *
- * Schema di naming assunto: <prefix>_dir<N>.png dentro assets/character/,
- * dove N va da 0 a 7 (le 8 direzioni). Es: "Boxer__WalkFoward_dir6.png".
+ * Carica un set di animazioni da spritesheet a griglia, organizzati in sottocartelle
+ * per azione: assets/character/<actionFolder>/<filenamePrefix>_dir<N>.png
+ * dove N va da 1 a 8 (le 8 direzioni, secondo il naming del pacchetto).
  */
 class CharacterAnimations {
-    private val animations = mutableMapOf<Direction, Animation<TextureRegion>>()
+    private val animations = mutableMapOf<Pair<String, Direction>, Animation<TextureRegion>>()
     private val loadedTextures = mutableListOf<Texture>() // per dispose() pulito
 
     /**
-     * Carica uno spritesheet a griglia e ne ricava un'animazione.
+     * Carica uno spritesheet a griglia e ne ricava un'animazione per una specifica azione+direzione.
      *
+     * @param actionFolder sottocartella dell'azione, es. "walk" o "idle"
      * @param filenamePrefix es. "Boxer__WalkFoward" (senza "_dirN.png")
      * @param direction la direzione corrispondente a questo file
+     * @param directionIndex il numero N nel nome file (_dirN), secondo il naming del pacchetto
      * @param cols numero di colonne della griglia
      * @param rows numero di righe della griglia
      * @param validFrameCount quanti frame della griglia sono effettivamente usati
      *                        (le celle in eccedenza, es. l'ultima vuota, vengono scartate)
      */
     fun loadDirection(
+        action: String,
+        actionFolder: String,
         filenamePrefix: String,
         direction: Direction,
         directionIndex: Int,
@@ -60,7 +62,7 @@ class CharacterAnimations {
         validFrameCount: Int,
         frameDuration: Float = 0.08f
     ) {
-        val path = "character/${filenamePrefix}_dir$directionIndex.png"
+        val path = "character/$actionFolder/${filenamePrefix}_dir$directionIndex.png"
         val texture = Texture(Gdx.files.internal(path))
         loadedTextures.add(texture)
 
@@ -81,11 +83,17 @@ class CharacterAnimations {
             }
         }
 
-        animations[direction] = Animation(frameDuration, frames, Animation.PlayMode.LOOP)
+        animations[action to direction] = Animation(frameDuration, frames, Animation.PlayMode.LOOP)
     }
 
-    fun getFrame(direction: Direction, stateTime: Float): TextureRegion? {
-        return animations[direction]?.getKeyFrame(stateTime, true)
+    /**
+     * Ritorna il frame corrente per azione+direzione. Se l'azione richiesta non e'
+     * (ancora) caricata, ripiega su "walk" nella stessa direzione, cosi' il personaggio
+     * non sparisce a schermo mentre aggiungi gradualmente le altre animazioni.
+     */
+    fun getFrame(action: String, direction: Direction, stateTime: Float): TextureRegion? {
+        animations[action to direction]?.let { return it.getKeyFrame(stateTime, true) }
+        return animations["walk" to direction]?.getKeyFrame(stateTime, true)
     }
 
     fun dispose() {
@@ -155,10 +163,11 @@ class IsometricPrototypeScreen : ApplicationAdapter() {
         WorldObject(5f, 1f, Color.YELLOW, 40f)
     )
 
-    // Stato del player: posizione + direzione corrente + tempo per l'animazione
+    // Stato del player: posizione + direzione/azione corrente + tempo per l'animazione
     private var playerGridX = 4f
     private var playerGridY = 4f
     private var playerDirection = Direction.SOUTH
+    private var playerAction = "idle" // "idle" o "walk", aggiornato in handleInput
     private var stateTime = 0f
 
     override fun create() {
@@ -188,12 +197,32 @@ class IsometricPrototypeScreen : ApplicationAdapter() {
             val direction = baseOrder[eighth]
 
             characterAnimations.loadDirection(
+                action = "walk",
+                actionFolder = "walk",
                 filenamePrefix = "Boxer__WalkFoward",
                 direction = direction,
                 directionIndex = dirNumber,
                 cols = 5,
                 rows = 5,
                 validFrameCount = 24 // griglia 5x5 = 25 celle, l'ultima e' vuota
+            )
+        }
+
+        for (dirNumber in 1..8) {
+            var eighth = (dirNumber - 1 + ROTATION_OFFSET) % 8
+            if (eighth < 0) eighth += 8
+            if (REVERSE_ROTATION) eighth = (8 - eighth) % 8
+            val direction = baseOrder[eighth]
+
+            characterAnimations.loadDirection(
+                action = "idle",
+                actionFolder = "idle",
+                filenamePrefix = "Boxer__idle",
+                direction = direction,
+                directionIndex = dirNumber,
+                cols = 6,
+                rows = 6,
+                validFrameCount = 31 // griglia 6x6 = 36 celle, ultime 5 vuote
             )
         }
     }
@@ -250,6 +279,7 @@ class IsometricPrototypeScreen : ApplicationAdapter() {
             val screenDy = (dx + dy) * (tileHeight / 2f)
             playerDirection = directionFromVector(screenDx, screenDy)
         }
+        playerAction = if (isMoving) "walk" else "idle"
 
         playerGridX += direction.x * speed * delta
         playerGridY += direction.y * speed * delta
@@ -283,7 +313,7 @@ class IsometricPrototypeScreen : ApplicationAdapter() {
     }
 
     private fun drawObjects(originX: Float, originY: Float) {
-        val playerFrame = characterAnimations.getFrame(playerDirection, stateTime)
+        val playerFrame = characterAnimations.getFrame(playerAction, playerDirection, stateTime)
 
         val drawables = mutableListOf<Drawable>()
         objects.forEach { drawables.add(Drawable.Circle(it.gridX, it.gridY, it.color, it.size)) }
